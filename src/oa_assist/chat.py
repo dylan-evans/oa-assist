@@ -1,10 +1,10 @@
 
-from athena_code_creator import oa
+from ._dep import openai as oa
+from ._dep.openai import Thread, ThreadMessage
+from ._dep import rich as ui
+from ._dep.rich import Console, Panel, Markdown, Prompt, Columns
 
-from athena_code_creator.oa import Thread, ThreadMessage
 
-from athena_code_creator.cli import ui
-from athena_code_creator.cli.ui import Working, Console, Panel, Markdown, Prompt, Columns
 
 class ChatView:
     def __init__(self, console: Console):

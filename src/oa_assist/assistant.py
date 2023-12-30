@@ -1,99 +1,128 @@
-import rich
-import rich.box
-from rich.console import Console
-from rich.table import Table, Column
-from rich.emoji import Emoji
-import click
+import time
+from logging import info
 
-from ..oa import Assistant
-from .cli import cli, CLI
-from ..tool_functions import DEFAULT_FUNCTIONS
+import openai
+from openai.types.beta.assistant import Assistant
+from openai.types.beta.thread import Thread
+from openai.types.beta.assistant_create_params import AssistantCreateParams
+from openai.types.beta.threads.run_submit_tool_outputs_params import RunSubmitToolOutputsParams, ToolOutput
+from openai.types.beta.threads.required_action_function_tool_call import RequiredActionFunctionToolCall, Function
 
-def show_assistant(console: Console, assistant: Assistant):
-    console.print(f"Name = {assistant.name}, ID = {assistant.id}")
+from .tool_functions import BaseFunction, WriteFileFunction, FunctionEventHandler
 
 
-@cli.group(invoke_without_command=True)
-@click.pass_context
-def assistant(ctx):
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(list_assistants)
+class AssistantInterface:
+    @classmethod
+    def create(cls, client: openai.OpenAI, functions: list[BaseFunction], params: AssistantCreateParams):
+        assistant = client.beta.assistants.create(**params)
+        info("Created assistant_id '%s'", assistant.id)
+        return cls(client, assistant, functions)
+
+    @classmethod
+    def retrieve(cls, client: openai.OpenAI, assistant_id: str, functions: list[BaseFunction]):
+        assistant = client.beta.assistants.retrieve(assistant_id=assistant_id)
+        info("Retrieved assistant_id '%s'", assistant.id)
+        return cls(client, assistant, functions)
+
+    def __init__(self, client: openai.OpenAI, assistant: Assistant, functions: list[BaseFunction] = []):
+        self.client = client
+        self.assistant = assistant
+        self.functions = {func.NAME: func for func in functions}
+
+    def create_thread(self):
+        return ThreadInterface.create(self)
+
+    def retrieve_thread(self, thread_id: str):
+        return ThreadInterface.retrieve(self, thread_id)
 
 
-@assistant.command(name="list")
-@click.pass_obj
-def list_assistants(obj: CLI):
-    table = Table(
-        ":question_mark:",
-        "Name",
-        "ID",
-        "Model",
-        Column("Instructions", no_wrap=True),
-        title="Assistants",
-        box=rich.box.SIMPLE_HEAD
-    )
-    with obj.console.status("Working..."):
-        for item in obj.openai.beta.assistants.list():
-            selected = obj.config.selected_assistant_id == item.id
+class ThreadInterface:
+    @classmethod
+    def create(cls, assistant_interface: AssistantInterface):
+        thread = assistant_interface.client.beta.threads.create()
+        info("Created thread_id '%s'", thread.id)
+        return cls(assistant_interface, thread)
 
-            table.add_row(
-                ":star:" if selected else "",
-                item.name,
-                item.id,
-                item.model,
-                item.instructions.split("\n")[0].strip(),
-                style="bold green" if selected else "",
-            )
-    obj.console.print(table)
+    @classmethod
+    def retrieve(cls, assistant_inteface: AssistantInterface, thread_id: str):
+        thread = assistant_inteface.client.beta.threads.retrieve(thread_id=thread_id)
+        info("Retrieved thread_id '%s'", thread.id)
+        return cls(assistant_inteface, thread)
 
+    def __init__(self, assistant_interface: AssistantInterface, thread: Thread):
+        self.assistant_interface = assistant_interface
+        self.thread = thread
+        self.client = self.assistant_interface.client
 
-@assistant.command
-@click.pass_obj
-@click.argument("assistant_id", nargs=-1)
-def delete(obj: CLI, assistant_id):
-    with obj.console.status("Working..."):
-        for id in assistant_id:
-            obj.console.print(f"Deleting assistant [bold]{id}[/bold].")
-            obj.openai.beta.assistants.delete(assistant_id=id)
+    @property
+    def functions(self):
+        return self.assistant_interface.functions
 
-
-@assistant.command
-@click.pass_obj
-@click.argument("assistant_id")
-@click.option("--name", "-n", is_flag=True)
-def select(obj: CLI, assistant_id: str, name: bool):
-    with obj.console.status("Working..."):
-        if name:
-            obj.console.print("TODO")
-        else:
-            assist = obj.openai.beta.assistants.retrieve(assistant_id)
-            obj.config.selected_assistant_id = assist.id
-            obj.config.save()
-            obj.console.print(f"[bold]{assist.id}[/bold] is now selected.")
-
-
-@assistant.command
-@click.pass_obj
-@click.argument("model")
-@click.argument("name")
-@click.argument("instructions")
-@click.option("--select", "-s", is_flag=True)
-def create(obj: CLI, model, name, instructions, select):
-    with obj.console.status("Working..."):
-        assist = obj.openai.beta.assistants.create(
-            model=model,
-            name=name,
-            instructions=instructions,
-            tools=[{"type": "code_interpreter"}] + [{"type": "function", "function": func.get_function()} for func in DEFAULT_FUNCTIONS],
+    def send(self, mesg: str):
+        self.client.beta.threads.messages.create(
+            thread_id=self.thread.id,
+            role="user",
+            content=mesg,
         )
-    obj.console.print("Created: ")
-    show_assistant(obj.console, assist)
-    if select:
-        obj.config.selected_assistant_id = assist.id
-        obj.config.save()
-        obj.console.print(f"[bold]{assist.id}[/bold] is now selected.")
+
+        run = self.client.beta.threads.runs.create(
+            thread_id=self.thread.id,
+            assistant_id=self.assistant_interface.assistant.id,
+        )
+
+        return PendingOperation(self, run.id)
+
+    def run_required_action(self, run: openai.types.beta.threads.Run, pending: "PendingOperation"):
+        outputs: list[ToolOutput] = []
+        action: RequiredActionFunctionToolCall
+        for action in run.required_action.submit_tool_outputs.tool_calls:
+            info("Should Run: %s: %s", action.function.name, action.function.arguments)
+
+            func_cls = self.functions[action.function.name]
+            func = func_cls.model_validate_json(action.function.arguments)
+
+            outputs.append(ToolOutput(output=str(func(pending)), tool_call_id=action.id))
+
+        self.client.beta.threads.runs.submit_tool_outputs(
+            thread_id=self.thread.id,
+            run_id=run.id,
+            tool_outputs=outputs,
+        )
 
 
-@assistant.command
-def update():
-    pass
+class PendingOperation(FunctionEventHandler):
+    def __init__(self, thread_interface, run_id):
+        self.thread_interface = thread_interface
+        self.run_id = run_id
+        self._log_messages: list[str] = []
+
+    def log(self, mesg: str):
+        self._log_messages.append(mesg)
+
+    def get_log_messages(self) -> list[str]:
+        log_messages = self._log_messages
+        if log_messages:
+            self._log_messages = []
+        return log_messages
+
+    def ready(self):
+        run = self.thread_interface.client.beta.threads.runs.retrieve(
+            thread_id=self.thread_interface.thread.id,
+            run_id=self.run_id,
+        )
+        match run.status:
+            case "completed":
+                return True
+            case "requires_action":
+                self.thread_interface.run_required_action(run, self)
+            case "queued" | "in_progress":
+                pass
+            case _:
+                raise ValueError(f"Unhandled status: {run.status}")
+        return False
+
+    def get_response(self):
+        return list(self.thread_interface.client.beta.threads.messages.list(
+            thread_id=self.thread_interface.thread.id,
+            limit=1,
+        ))[0]

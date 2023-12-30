@@ -12,9 +12,10 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 
 from .chat import ChatView
-from ..assistant import AssistantInterface
-from ..config import UserConfig, load_user_config, save_user_config
-from ..tool_functions import DEFAULT_FUNCTIONS
+from .assistant import AssistantInterface
+from .config import UserConfig, load_user_config, save_user_config
+from .tool_functions import DEFAULT_FUNCTIONS
+
 
 
 class CLI(pydantic.BaseModel):
@@ -25,16 +26,34 @@ class CLI(pydantic.BaseModel):
 
 
 class ShortcutGroup(click.Group):
-    def get_command(self, ctx, cmd_name):
-        cmd = super().get_command(ctx, cmd_name)
-        if cmd:
-            return cmd
+    ALIASES = {
+        "ls": "list",
+        "rm": "delete",
+    }
 
+    def resolve_command(self, ctx: Context, args: List[str]) -> tuple[str | None, Command | None, List[str]]:
+        _, cmd, args = super().resolve_command(ctx, args)
+        return cmd.name, cmd, args
+
+    def get_command(self, ctx, cmd_name):
+        return (
+            super().get_command(ctx, cmd_name) or
+            self.get_plural_command(ctx, cmd_name) or
+            self.get_alias_command(ctx, cmd_name) or
+            self.get_short_command(ctx, cmd_name)
+        )
+
+    def get_plural_command(self, ctx: Context, cmd_name: str):
+        # TODO: doesn't work
         if cmd_name[-1] == 's':
             cmd = super().get_command(ctx, cmd_name[:-1])
-            if cmd:
-                return cmd
+            return cmd
 
+    def get_alias_command(self, ctx: Context, cmd_name: str):
+        if cmd_name in self.ALIASES:
+            return self.get_command(ctx, self.ALIASES[cmd_name])
+
+    def get_short_command(self, ctx, cmd_name: str):
         commands = [x for x in self.list_commands(ctx) if x.startswith(cmd_name)]
 
         if not commands:
@@ -42,10 +61,6 @@ class ShortcutGroup(click.Group):
         elif len(commands) > 1:
             ctx.fail("Ambiguous command '{cmd_name}")
         return super().get_command(ctx, commands[0])
-
-    def resolve_command(self, ctx: Context, args: List[str]) -> tuple[str | None, Command | None, List[str]]:
-        _, cmd, args = super().resolve_command(ctx, args)
-        return cmd.name, cmd, args
 
 
 @click.group(cls=ShortcutGroup)
@@ -57,6 +72,9 @@ def cli(ctx):
         console=Console(),
         config=load_user_config(),
     )
+
+
+cli.group_class = ShortcutGroup
 
 
 @cli.command
