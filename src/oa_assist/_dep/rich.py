@@ -2,7 +2,7 @@
 Helpers.
 """
 
-from rich.console import Console, ConsoleOptions
+from rich.console import Console, ConsoleOptions, RenderResult
 from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.prompt import Prompt

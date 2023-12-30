@@ -9,13 +9,15 @@ dependencies = [
     "openai>=1.6.0",
     "click>=8.1.7",
     "rich>=13.7.0",
+    "blinker>=1.7.0"
 ]
-requires-python = "==3.11.*"
+requires-python = ">=3.11.*"
 readme = "README.md"
 license = {text = "MIT"}
 
 [project.scripts]
-acc = "oa_assist.cli:main"
+oaa = "oa_assist.main:main"
+oa-assist = "oa_assist.main:main"
 
 [tool.pdm]
 package-type = "application"

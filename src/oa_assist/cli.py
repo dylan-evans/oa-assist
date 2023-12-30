@@ -11,7 +11,7 @@ from rich.prompt import Prompt
 from rich.panel import Panel
 from rich.markdown import Markdown
 
-from .chat import ChatView
+from .chat import MessageListView, MessageView
 from .assistant import AssistantInterface
 from .config import UserConfig, load_user_config, save_user_config
 from .tool_functions import DEFAULT_FUNCTIONS
@@ -74,6 +74,7 @@ def cli(ctx):
     )
 
 
+# Ensure shortcuts are enabled for sub-groups.
 cli.group_class = ShortcutGroup
 
 
@@ -81,17 +82,24 @@ cli.group_class = ShortcutGroup
 @click.option("--message", "-m")
 @click.pass_obj
 def chat(obj: CLI, message: str | None):
-    if obj.config.selected_assistant_id is None:
+    if obj.config.selected.assistant_id is None:
         raise click.ClickException("No assistant selected")
 
-    acc = AssistantInterface.retrieve(obj.openai, obj.config.selected_assistant_id, DEFAULT_FUNCTIONS)
-
-    if obj.config.selected_thread_id:
-        thread = acc.retrieve_thread(obj.config.selected_thread_id)
-    else:
-        thread = acc.create_thread()
+    acc = AssistantInterface.retrieve(obj.openai, obj.config.selected.assistant_id, DEFAULT_FUNCTIONS)
 
     console = Console()
+
+    if obj.config.selected.thread_id:
+        #thread_id = openai.beta.threads.retrieve(obj.config.selected.thread_id)
+        thread = acc.retrieve_thread(obj.config.selected.thread_id)
+        messages = openai.beta.threads.messages.list(obj.config.selected.thread_id)
+        console.print(MessageListView(thread=list(messages)))
+    else:
+        thread = acc.create_thread()
+        with obj.config.update() as conf:
+            conf.selected.thread_id = thread.thread.id
+            conf.cache.thread[thread.thread.id] = thread.thread
+        #thread_id = openai.beta.threads.create()
 
     if message:
         console.print(f"[bold red]chat:[/bold red] {message}")
@@ -113,4 +121,4 @@ def send_cmd(console, thread, line):
             time.sleep(0.2)
         resp = op.get_response()
 
-    ChatView(console).show_assistant_message(resp)
+    console.print(MessageView(resp))
