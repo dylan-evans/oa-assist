@@ -2,7 +2,7 @@
 import click
 
 from .cli import cli, CLI, ShortcutGroup
-from .ui import Working, Table
+from ._dep.rich import Table
 
 
 @cli.group()

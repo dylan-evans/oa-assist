@@ -15,6 +15,7 @@ class FunctionEventHandler(ABC):
 
 # TODO: rename BaseToolFunction
 class BaseFunction(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
     def __call__(self, events: FunctionEventHandler = FunctionEventHandler()):
         raise NotImplementedError()
 
@@ -23,7 +24,7 @@ class BaseFunction(pydantic.BaseModel):
         return {
             "name": cls.NAME,
             "description": cls.DESCRIPTION,
-            "parameters": cls.model_json_schema()
+            "parameters": ""
         }
 
 
@@ -46,7 +47,7 @@ class ExecFunction(BaseFunction):
 
 class WriteFileFunction(BaseFunction):
     NAME: ClassVar[str] = "write_file"
-    DESCRIPTION: ClassVar[str] = "Write content to a file within a local directory"
+    DESCRIPTION: ClassVar[str] = "Write contenst to a file within a local directory"
     path: str
     content: str
 
